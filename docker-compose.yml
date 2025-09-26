@@ -1,0 +1,30 @@
+name: fastapi-demo
+
+services:
+  app:
+    build: .
+    container_name: fastapi-demo-app
+    env_file: .env
+    ports:
+      - "8000:8000"
+    # 将源代码挂载到容器
+    volumes:
+      - ./src:/app/src
+      - app_data:/data
+    # 健康检查：探测 HTTP /health
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+    restart: unless-stopped
+
+volumes:
+  app_data:
+    driver: local

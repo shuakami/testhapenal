@@ -1,0 +1,11 @@
+# Web 框架与服务器
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# 配置与校验（Pydantic v2 / pydantic-settings）
+pydantic>=2.8
+pydantic-settings>=2.3
+
+# 数据库（SQLAlchemy 2.x 异步 + SQLite 驱动）
+SQLAlchemy>=2.0
+aiosqlite>=0.20

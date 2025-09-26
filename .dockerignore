@@ -1,0 +1,31 @@
+# 典型 Python 忽略项
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.log
+*.pid
+
+# 虚拟环境
+.venv/
+env/
+venv/
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 编辑器/IDE
+.vscode/
+.idea/
+
+# 其他
+.DS_Store
+.git/
+.gitignore
+
+# 本地环境文件（演示保留 .env，生产请忽略/保护）
+# .env
