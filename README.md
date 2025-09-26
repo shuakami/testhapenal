@@ -1,4 +1,4 @@
-# Docker Compose + FastAPI 教学示例（Python 3.13，极简最佳实践）
+# Docker Compose + FastAPI
 
 > **亮点**：
 > - **最新稳定**：基于 `python:3.13-slim` 构建。
