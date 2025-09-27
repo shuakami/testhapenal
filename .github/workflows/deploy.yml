@@ -1,0 +1,179 @@
+name: Deploy to OSS
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-deploy: 
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Archive project files
+        run: |
+          # Use git archive for a clean, atomic snapshot of tracked files
+          git archive --format=tar -o release.tar HEAD
+          
+          # Add necessary untracked files to the archive
+          
+          # Compress the final archive
+          gzip release.tar
+      
+      - name: Create version file
+        run: |
+          COMMIT_SHORT="${{ github.sha }}"
+          COMMIT_SHORT=${COMMIT_SHORT:0:8}
+          echo "{
+            \"timestamp\": $(date +%s), 
+            \"commit\": \"${{ github.sha }}\", 
+            \"commit_short\": \"${COMMIT_SHORT}\",
+            \"ref\": \"${{ github.ref }}\",
+            \"message\": \"${{ github.event.head_commit.message }}\",
+            \"author\": \"${{ github.event.head_commit.author.name }}\",
+            \"author_email\": \"${{ github.event.head_commit.author.email }}\",
+            \"release_file\": \"${COMMIT_SHORT}-release.tar.gz\",
+            \"project_id\": \"fc43cad3-a0ef-48f3-9cd7-74d6e1430384\"
+          }" > version.json
+          cat version.json
+
+      - name: Create upload script
+        run: |
+          cat > upload_to_oss.py << 'EOF'
+          import os
+          import sys
+          import hmac
+          from hashlib import sha1
+          import httpx
+
+          API_HOST = "https://api.dogecloud.com"
+
+          def generate_auth_token(access_key, secret_key, request_uri, body=""):
+              """Generate Authorization Token for DogeCloud API."""
+              sign_str = f"{request_uri}\n{body}"
+              signed_data = hmac.new(
+                  secret_key.encode(),
+                  sign_str.encode('utf-8'),
+                  sha1
+              )
+              sign = signed_data.digest().hex()
+              access_token = f"{access_key}:{sign}"
+              return f"TOKEN {access_token}"
+
+          def upload_file(access_key, secret_key, bucket, key, file_path, public_url):
+              """Uploads a file to DogeCloud OSS and returns the custom public URL."""
+              request_uri = f"/oss/upload/put.json?bucket={bucket}&key={key}"
+              
+              with open(file_path, "rb") as f:
+                  file_content = f.read()
+
+              headers = {
+                  "Authorization": generate_auth_token(access_key, secret_key, request_uri, ""),
+                  "Content-Type": "application/octet-stream"
+              }
+              
+              print(f"Uploading {file_path} to gs://{bucket}/{key}...")
+              
+              try:
+                  with httpx.Client() as client:
+                      response = client.put(
+                          f"{API_HOST}{request_uri}",
+                          headers=headers,
+                          content=file_content,
+                          timeout=300
+                      )
+                      response.raise_for_status()
+                      result = response.json()
+                      
+                      if result.get("code") != 200:
+                          print(f"Error: Upload failed with code {result.get('code')}: {result.get('msg')}")
+                          sys.exit(1)
+                      
+                      # 使用传入的公共URL替换多吉云默认的URL
+                      final_url = f"{public_url}/{key}"
+                      
+                      print("Upload successful!")
+                      print(f"URL: {final_url}")
+                      print(f"Original OSS URL: {result['data'].get('url', 'N/A')}")
+
+              except httpx.HTTPStatusError as e:
+                  print(f"Error: HTTP Status Error: {e.response.status_code}")
+                  print(f"Response body: {e.response.text}")
+                  sys.exit(1)
+              except Exception as e:
+                  print(f"An unexpected error occurred: {str(e)}")
+                  sys.exit(1)
+
+          if __name__ == "__main__":
+              # Get credentials and info from environment variables
+              oss_access_key = os.environ.get("OSS_ACCESS_KEY")
+              oss_secret_key = os.environ.get("OSS_SECRET_KEY")
+              oss_bucket = os.environ.get("OSS_BUCKET")
+              oss_public_url = os.environ.get("OSS_PUBLIC_URL", "https://sync.luoxiaohei.sdjz.wiki")
+              
+              if not all([oss_access_key, oss_secret_key, oss_bucket]):
+                  print("Error: Missing required environment variables (OSS_ACCESS_KEY, OSS_SECRET_KEY, OSS_BUCKET).")
+                  sys.exit(1)
+
+              # File to upload is passed as the first argument
+              if len(sys.argv) < 2:
+                  print("Error: No file path provided.")
+                  print("Usage: python upload_to_oss.py <path_to_file>")
+                  sys.exit(1)
+
+              file_to_upload = sys.argv[1]
+              
+              # Create project-specific key path with commit info to support multiple deployments
+              project_id = os.environ.get("PROJECT_ID", "unknown")
+              commit_sha = os.environ.get("GITHUB_SHA", "unknown")[:8]  # Use short commit hash
+              filename = os.path.basename(file_to_upload)
+              
+              # Different naming strategy for different files
+              if filename == "version.json":
+                  # version.json always at root for easy polling
+                  oss_key = f"project-{project_id}/version.json"
+              else:
+                  # Release archives include commit hash to support multiple versions
+                  name, ext = os.path.splitext(filename)
+                  oss_key = f"project-{project_id}/{commit_sha}-{filename}"
+
+              upload_file(oss_access_key, oss_secret_key, oss_bucket, oss_key, file_to_upload, oss_public_url)
+          EOF
+      
+      - name: Upload release archive to DogeCloud OSS
+        env:
+          OSS_ACCESS_KEY: ${{ secrets.OSS_ACCESS_KEY }}
+          OSS_SECRET_KEY: ${{ secrets.OSS_SECRET_KEY }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_PUBLIC_URL: ${{ secrets.OSS_PUBLIC_URL }}
+          PROJECT_ID: "fc43cad3-a0ef-48f3-9cd7-74d6e1430384"
+          GITHUB_SHA: ${{ github.sha }}
+        run: python upload_to_oss.py release.tar.gz
+      
+      - name: Upload version file to DogeCloud OSS
+        env:
+          OSS_ACCESS_KEY: ${{ secrets.OSS_ACCESS_KEY }}
+          OSS_SECRET_KEY: ${{ secrets.OSS_SECRET_KEY }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_PUBLIC_URL: ${{ secrets.OSS_PUBLIC_URL }}
+          PROJECT_ID: "fc43cad3-a0ef-48f3-9cd7-74d6e1430384"
+          GITHUB_SHA: ${{ github.sha }}
+        run: python upload_to_oss.py version.json
+
+      - name: Deployment status
+        run: |
+          echo "Archive uploaded for testhapenal"
+          echo "Project ID: fc43cad3-a0ef-48f3-9cd7-74d6e1430384"
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Hapenal will detect and deploy the new version automatically"
